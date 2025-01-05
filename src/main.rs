@@ -23,7 +23,7 @@ fn handle_advisor(mut stream: UnixStream) {
         Ok(stream) => stream,
         Err(e) => {
             error!("Failed to clone handle to socket: {}", e);
-            process::exit(1);
+            return;
         }
     };
     let heartbeat_write_lock = Arc::clone(&write_lock);
@@ -39,21 +39,30 @@ fn handle_advisor(mut stream: UnixStream) {
             Err(poisoned) => poisoned.into_inner(),
         };
 
-        socket_send_msg(&mut heartbeat_stream, msg);
+        match socket_send_msg(&mut heartbeat_stream, msg) {
+            Ok(_) => (),
+            Err(e) => {
+                error!("Failed to write message to Advisor: {}", e);
+                break;
+            }
+        }
     });
 
     loop {
-        let _msg = socket_read_msg(&mut stream);
+        let _msg = match socket_read_msg(&mut stream) {
+            Ok(_) => (),
+            Err(e) => {
+                error!("Failed to read message from Advisor: {}", e);
+                break;
+            }
+        };
     }
 }
 
-fn socket_read_msg(stream: &mut UnixStream) -> JsonValue {
+fn socket_read_msg(stream: &mut UnixStream) -> Result<JsonValue, String> {
     let msg_len = match deserialize_length(stream) {
         Ok(len) => len,
-        Err(e) => {
-            error!("Failed to read message length from Advisor: {}", e);
-            process::exit(1);
-        }
+        Err(e) => return Err(format!("Failed to read message length from Advisor: {}", e)),
     };
     let mut msg_bytes = vec![0u8; msg_len];
     let _ = stream.read_exact(&mut msg_bytes);
@@ -61,42 +70,36 @@ fn socket_read_msg(stream: &mut UnixStream) -> JsonValue {
     let msg_str = match String::from_utf8(msg_bytes) {
         Ok(str) => str,
         Err(e) => {
-            error!(
+            return Err(format!(
                 "Incoming message from Advisor was not encoded in UTF-8: {}",
                 e
-            );
-            process::exit(1);
+            ))
         }
     };
     let msg = match json::parse(msg_str.as_str()) {
         Ok(msg) => msg,
         Err(e) => {
-            // TODO: Pass error up
-            error!(
+            return Err(format!(
                 "Incoming message from Advisor was in an invalid format: {}",
                 e
-            );
-            process::exit(1);
+            ))
         }
     };
+
     println!("RX: {}", msg);
-    return msg;
+    return Ok(msg);
 }
 
-fn socket_send_msg(stream: &mut UnixStream, msg: JsonValue) {
+fn socket_send_msg(stream: &mut UnixStream, msg: JsonValue) -> Result<(), io::Error> {
     println!("TX: {}", msg);
     let msg_str = json::stringify(msg);
     let msg_bytes = msg_str.into_bytes();
     let msg_len_bytes = serialize_length(msg_bytes.len());
 
-    stream
-        .write_all(&msg_len_bytes)
-        .and(stream.write_all(&msg_bytes))
-        .and(stream.flush())
-        .unwrap_or_else(|e| {
-            error!("Failed to write message to Advisor: {}", e);
-            process::exit(1);
-        });
+    stream.write_all(&msg_len_bytes)?;
+    stream.write_all(&msg_bytes)?;
+    stream.flush()?;
+    return Ok(());
 }
 
 pub fn serialize_length(len: usize) -> [u8; 4] {
