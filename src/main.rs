@@ -2,17 +2,18 @@ mod cons;
 mod models;
 
 use std::{
-    collections::HashSet, fs, io::{self, BufRead, Read, Write}, os::unix::{fs::PermissionsExt, net::{UnixListener, UnixStream}}, process, sync::{Arc, Mutex}, thread, time::Duration
+    collections::HashSet, env, fs, io::{self, BufRead, Read, Write}, os::unix::{fs::PermissionsExt, net::{UnixListener, UnixStream}}, process, sync::{Arc, Mutex}, thread, time::Duration
 };
 
 use log::{debug, error, info, warn};
 use models::{AdvisorMsg, OverwatchMsg};
 use notify_rust::Notification;
-use resistance_civil_protection::CivilProtection;
+use resistance_civil_protection::{email, CivilProtection};
 use simplelog::TermLogger;
 use syslog::{BasicLogger, Facility, Formatter3164};
 use url::Url;
 use resistance_civil_protection;
+use dotenv;
 
 fn handle_advisor(mut stream: UnixStream, cp: Arc<Mutex<CivilProtection>>, blockset: Arc<Mutex<HashSet<String>>>) {
     info!("Accepted incoming connection");
@@ -111,8 +112,20 @@ fn socket_handle_msg(msg: AdvisorMsg, cp_lock: &Arc<Mutex<CivilProtection>>, blo
             debug!("Heartbeat received. Incognito mode is {}", if incognito { "allowed" } else { "not allowed" });
         }
         AdvisorMsg::Navigation { url } => {
-            let parsed_url = Url::parse(url.as_str()).unwrap();
-            let host_str = parsed_url.host_str().unwrap();
+            let parsed_url = match Url::parse(url.as_str()) {
+                Ok(url) => url,
+                Err(e) => {
+                    warn!("Failed to parse received URL ({}): {}", url, e);
+                    return;
+                }
+            };
+            let host_str = match parsed_url.host_str() {
+                Some(host_str) => host_str,
+                None => {
+                    warn!("Did not find host_str in received URL: {}", url);
+                    return;
+                }
+            };
             debug!("User navigated to {}", host_str);
 
             let blockset = blockset_lock
@@ -207,10 +220,31 @@ fn get_blocked_set() -> HashSet<String> {
 }
 
 fn main() {
+    dotenv::from_filename(".env.local").ok();
+
     init_logging();
+
+    let debug_mode = env::var("RESISTANCE_DEBUG").is_ok();
 
     info!("Initializing Civil Protection...");
     let mut cp = CivilProtection::new();
+
+    if debug_mode {
+        let user_identity = email::Identity {
+            email: env::var("RESISTANCE_USER").unwrap(),
+            name: "Resistance User".into(),
+        };
+
+        let squadmate = email::Identity {
+            email: env::var("RESISTANCE_SQUADMATE").unwrap(),
+            name: "Resistance Squadmate".into(),
+        };
+
+        fs::remove_dir_all("./resistance-conf").ok();
+        cp.create_config(user_identity, env::var("RESISTANCE_PASSWORD").unwrap()).unwrap();
+        cp.add_squadmate(squadmate).unwrap();
+    }
+
     cp.login().unwrap_or_else(|_| {
         Notification::new()
             .summary("Resistance")
