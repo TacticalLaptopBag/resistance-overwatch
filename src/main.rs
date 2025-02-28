@@ -241,7 +241,7 @@ fn main() {
         };
 
         fs::remove_dir_all("./resistance-conf").ok();
-        cp.create_config(user_identity, env::var("RESISTANCE_PASSWORD").unwrap()).unwrap();
+        cp.create_config_smtp(user_identity, env::var("RESISTANCE_PASSWORD").unwrap()).unwrap();
         cp.add_squadmate(squadmate).unwrap();
     }
 
