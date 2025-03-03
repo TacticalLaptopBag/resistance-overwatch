@@ -246,11 +246,12 @@ fn main() {
     }
 
     cp.login().unwrap_or_else(|_| {
-        Notification::new()
-            .summary("Resistance")
-            .body("Unable to login to email. Please set this up using `cmacm`.")
-            .show()
-            .unwrap();
+        // TODO: Notifications won't work when running as root
+        // Notification::new()
+        //     .summary("Resistance")
+        //     .body("Unable to login to email. Please set this up using `cmacm`.")
+        //     .show()
+        //     .unwrap();
         error!("Failed to login to Civil Protection!");
         process::exit(1);
     });
